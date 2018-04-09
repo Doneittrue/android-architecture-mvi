@@ -106,11 +106,14 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
    */
   private fun bind() {
     // Subscribe to the ViewModel and call render for every emitted state
-    disposables.add(viewModel.states().subscribe(this::render))
+//    disposables.add(viewModel.states().subscribe(this::render))
 
     // Pass the UI's intents to the ViewModel
     job = launch(UI) {
       viewModel.processIntents2(intents2())
+      for (tasksViewState in viewModel.states2()) {
+        render(tasksViewState)
+      }
     }
 
     disposables.add(

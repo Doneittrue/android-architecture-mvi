@@ -41,7 +41,10 @@ import io.reactivex.ObservableTransformer
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.functions.BiFunction
 import io.reactivex.subjects.PublishSubject
+import kotlinx.coroutines.experimental.async
+import kotlinx.coroutines.experimental.channels.Channel
 import kotlinx.coroutines.experimental.channels.ReceiveChannel
+import kotlinx.coroutines.experimental.rx2.openSubscription
 import kotlinx.coroutines.experimental.selects.select
 
 /**
@@ -61,7 +64,10 @@ class TasksViewModel(
    * while the UI disconnects and reconnects on config changes.
    */
   private val intentsSubject: PublishSubject<TasksIntent> = PublishSubject.create()
+  private val intentsSubject2: Channel<TasksIntent> = Channel()
+
   private val statesObservable: Observable<TasksViewState> = compose()
+  private val statesObservable2: ReceiveChannel<TasksViewState> = compose2()
 
   /**
    * take only the first ever InitialIntent and all intents of other types
@@ -77,7 +83,7 @@ class TasksViewModel(
       }
     }
 
-  suspend fun processIntents2(intents: List<ReceiveChannel<TasksIntent>>) {
+  fun processIntents2(intents: List<ReceiveChannel<TasksIntent>>) = async {
     while (true) {
       select<Unit> {
         intents.forEach {
@@ -92,8 +98,10 @@ class TasksViewModel(
   }
 
   override fun processIntents(intents: Observable<TasksIntent>) {
-    intents.subscribe(intentsSubject)
+//    intents.subscribe(intentsSubject)
   }
+
+  fun states2(): ReceiveChannel<TasksViewState> = statesObservable2
 
   override fun states(): Observable<TasksViewState> = statesObservable
       .observeOn(AndroidSchedulers.mainThread())
@@ -121,6 +129,29 @@ class TasksViewModel(
         // This allows the stream to stay alive even when the UI disconnects and
         // match the stream's lifecycle to the ViewModel's one.
         .autoConnect(0)
+  }
+
+  private fun compose2(): ReceiveChannel<TasksViewState> {
+    return intentsSubject
+        .compose(intentFilter)
+        .map(this::actionFromIntent)
+        .compose(actionProcessorHolder.actionProcessor)
+        // Cache each state and pass it to the reducer to create a new state from
+        // the previous cached one and the latest Result emitted from the action processor.
+        // The Scan operator is used here for the caching.
+        .scan(TasksViewState.idle(), reducer)
+        // When a reducer just emits previousState, there's no reason to call render. In fact,
+        // redrawing the UI in cases like this can cause jank (e.g. messing up snackbar animations
+        // by showing the same snackbar twice in rapid succession).
+        .distinctUntilChanged()
+        // Emit the last one event of the stream on subscription
+        // Useful when a View rebinds to the ViewModel after rotation.
+        .replay(1)
+        // Create the stream on creation without waiting for anyone to subscribe
+        // This allows the stream to stay alive even when the UI disconnects and
+        // match the stream's lifecycle to the ViewModel's one.
+        .autoConnect(0)
+        .openSubscription()
   }
 
   /**
