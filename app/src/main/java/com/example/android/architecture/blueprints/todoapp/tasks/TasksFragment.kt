@@ -53,6 +53,12 @@ import com.jakewharton.rxbinding2.support.v4.widget.RxSwipeRefreshLayout
 import io.reactivex.Observable
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.subjects.PublishSubject
+import kotlinx.coroutines.experimental.Job
+import kotlinx.coroutines.experimental.android.UI
+import kotlinx.coroutines.experimental.channels.ReceiveChannel
+import kotlinx.coroutines.experimental.channels.produce
+import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.experimental.rx2.openSubscription
 import java.util.ArrayList
 import kotlin.LazyThreadSafetyMode.NONE
 
@@ -79,6 +85,8 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
         .get(TasksViewModel::class.java)
   }
 
+  private var job: Job? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     listAdapter = TasksAdapter(ArrayList(0))
@@ -99,8 +107,11 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
   private fun bind() {
     // Subscribe to the ViewModel and call render for every emitted state
     disposables.add(viewModel.states().subscribe(this::render))
+
     // Pass the UI's intents to the ViewModel
-    viewModel.processIntents(intents())
+    job = launch(UI) {
+      viewModel.processIntents2(intents2())
+    }
 
     disposables.add(
         listAdapter.taskClickObservable.subscribe { task -> showTaskDetailsUi(task.id) })
@@ -116,6 +127,7 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
   override fun onDestroy() {
     super.onDestroy()
 
+    job?.cancel()
     disposables.dispose()
   }
 
@@ -181,13 +193,23 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
     super.onCreateOptionsMenu(menu, inflater)
   }
 
+  private fun intents2(): List<ReceiveChannel<TasksIntent>> {
+    return listOf(
+        initialIntent2(),
+        refreshIntent2(),
+        adapterIntents2(),
+        clearCompletedTaskIntent2(),
+        changeFilterIntent2()
+    )
+  }
+
   override fun intents(): Observable<TasksIntent> {
     return Observable.merge(
         initialIntent(),
         refreshIntent(),
         adapterIntents(),
-        clearCompletedTaskIntent()).mergeWith(
-        changeFilterIntent())
+        clearCompletedTaskIntent()
+    ).mergeWith(changeFilterIntent())
   }
 
   override fun render(state: TasksViewState) {
@@ -245,6 +267,10 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
     Snackbar.make(view, message, Snackbar.LENGTH_LONG).show()
   }
 
+  private fun initialIntent2(): ReceiveChannel<TasksIntent.InitialIntent> = produce(UI) {
+    send(TasksIntent.InitialIntent)
+  }
+
   /**
    * The initial Intent the [MviView] emit to convey to the [MviViewModel]
    * that it is ready to receive data.
@@ -253,6 +279,13 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
    */
   private fun initialIntent(): Observable<TasksIntent.InitialIntent> {
     return Observable.just(TasksIntent.InitialIntent)
+  }
+
+  private fun refreshIntent2(): ReceiveChannel<TasksIntent.RefreshIntent> {
+    return RxSwipeRefreshLayout.refreshes(swipeRefreshLayout)
+        .map { TasksIntent.RefreshIntent(false) }
+        .mergeWith(refreshIntentPublisher)
+        .openSubscription()
   }
 
   private fun refreshIntent(): Observable<TasksIntent.RefreshIntent> {
@@ -265,8 +298,16 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
     return clearCompletedTaskIntentPublisher
   }
 
+  private fun clearCompletedTaskIntent2(): ReceiveChannel<TasksIntent.ClearCompletedTasksIntent> {
+    return clearCompletedTaskIntentPublisher.openSubscription()
+  }
+
   private fun changeFilterIntent(): Observable<TasksIntent.ChangeFilterIntent> {
     return changeFilterIntentPublisher
+  }
+
+  private fun changeFilterIntent2(): ReceiveChannel<TasksIntent.ChangeFilterIntent> {
+    return changeFilterIntentPublisher.openSubscription()
   }
 
   private fun adapterIntents(): Observable<TasksIntent> {
@@ -277,6 +318,18 @@ class TasksFragment : Fragment(), MviView<TasksIntent, TasksViewState> {
         ActivateTaskIntent(task)
       }
     }
+  }
+
+  private fun adapterIntents2(): ReceiveChannel<TasksIntent> {
+    return listAdapter.taskToggleObservable
+        .map { task ->
+          if (!task.completed) {
+            CompleteTaskIntent(task)
+          } else {
+            ActivateTaskIntent(task)
+          }
+        }
+        .openSubscription()
   }
 
   private fun showNoActiveTasks() {

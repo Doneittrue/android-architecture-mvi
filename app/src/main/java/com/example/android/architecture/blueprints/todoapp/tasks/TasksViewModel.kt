@@ -38,8 +38,11 @@ import com.example.android.architecture.blueprints.todoapp.tasks.TasksResult.Loa
 import com.example.android.architecture.blueprints.todoapp.util.notOfType
 import io.reactivex.Observable
 import io.reactivex.ObservableTransformer
+import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.functions.BiFunction
 import io.reactivex.subjects.PublishSubject
+import kotlinx.coroutines.experimental.channels.ReceiveChannel
+import kotlinx.coroutines.experimental.selects.select
 
 /**
  * Listens to user actions from the UI ([TasksFragment]), retrieves the data and updates the
@@ -74,11 +77,26 @@ class TasksViewModel(
       }
     }
 
+  suspend fun processIntents2(intents: List<ReceiveChannel<TasksIntent>>) {
+    while (true) {
+      select<Unit> {
+        intents.forEach {
+          if (!it.isClosedForReceive) {
+            it.onReceive { value ->
+              intentsSubject.onNext(value)
+            }
+          }
+        }
+      }
+    }
+  }
+
   override fun processIntents(intents: Observable<TasksIntent>) {
     intents.subscribe(intentsSubject)
   }
 
   override fun states(): Observable<TasksViewState> = statesObservable
+      .observeOn(AndroidSchedulers.mainThread())
 
   /**
    * Compose all components to create the stream logic
